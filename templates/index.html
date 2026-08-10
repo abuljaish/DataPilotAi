@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DataPilot AI — AI CSV Analyst</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- ========================================== -->
+    <!-- 1. HEADER SECTION                          -->
+    <!-- ========================================== -->
+    <header id="main-header">
+        <div class="header-brand">
+            <div class="brand-title-group">
+                <div class="brand-logo-wrapper" title="DataPilot AI Logo">
+                    <svg class="brand-logo-svg" width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="36" height="36" rx="10" fill="url(#dp-logo-grad)"/>
+                        <path d="M10 25V19M15 25V14M20 25V10M25 25V17" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+                        <path d="M20 8L26 8M26 8V14M26 8L18 16" stroke="#60a5fa" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <defs>
+                            <linearGradient id="dp-logo-grad" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+                                <stop stop-color="#1e3a8a"/>
+                                <stop offset="1" stop-color="#2563eb"/>
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                </div>
+                <h1 class="brand-name">DataPilot <span>AI</span></h1>
+                <span class="brand-badge">AI CSV ANALYST</span>
+            </div>
+            <p class="brand-subtitle">Upload your dataset, explore your data, and ask questions using AI.</p>
+        </div>
+        
+        <div class="header-actions">
+            <button id="theme-toggle" class="theme-toggle-btn" type="button" aria-label="Toggle dark/light mode">
+                <span class="theme-icon">🌙</span>
+                <span class="theme-text">Dark Mode</span>
+            </button>
+        </div>
+    </header>
+
+    <main id="main-content">
+
+        <!-- ========================================== -->
+        <!-- 2. CSV UPLOAD SECTION (HERO)               -->
+        <!-- ========================================== -->
+        <section id="csv-upload" class="hero-section">
+            <div class="workflow-steps">
+                <span class="step active"><span class="step-num">1</span> Upload CSV</span>
+                <span class="step-arrow">→</span>
+                <span class="step"><span class="step-num">2</span> Analyze Data</span>
+                <span class="step-arrow">→</span>
+                <span class="step"><span class="step-num">3</span> Ask Questions</span>
+                <span class="step-arrow">→</span>
+                <span class="step"><span class="step-num">4</span> Get AI Insights</span>
+            </div>
+
+            <div class="upload-header">
+                <span class="ai-badge">✨ AI-Powered Data Exploration</span>
+                <h2>Upload your CSV</h2>
+                <p>Select or drop a CSV dataset to instantly generate statistics, correlation matrices, and AI insights.</p>
+            </div>
+            
+            <form id="upload-form" class="upload-dropzone">
+                <div class="dropzone-icon">📁</div>
+                <label for="csv-file-input" class="file-label">Choose CSV File</label>
+                <input type="file" id="csv-file-input" name="csv-file" accept=".csv">
+                <button type="submit" id="upload-btn">Upload & Analyze Dataset</button>
+                <span class="file-hint">CSV files only (.csv)</span>
+            </form>
+
+            <div id="upload-status" class="status-message">
+                <p>No file uploaded yet.</p>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- 3. DATASET OVERVIEW SECTION               -->
+        <!-- ========================================== -->
+        <section id="dataset-overview">
+            <div class="section-header">
+                <h2>Dataset Overview</h2>
+                <p>High-level key metrics and structural summary of the loaded dataset.</p>
+            </div>
+
+            <!-- Metric Cards Container -->
+            <div id="overview-metrics" class="metrics-grid">
+                <div class="metric-card" id="metric-rows">
+                    <div class="metric-icon">📈</div>
+                    <h3>Total Rows</h3>
+                    <p class="metric-value">--</p>
+                </div>
+                
+                <div class="metric-card" id="metric-columns">
+                    <div class="metric-icon">📋</div>
+                    <h3>Total Columns</h3>
+                    <p class="metric-value">--</p>
+                </div>
+
+                <div class="metric-card" id="metric-missing">
+                    <div class="metric-icon">⚠️</div>
+                    <h3>Missing Values</h3>
+                    <p class="metric-value">--</p>
+                </div>
+
+                <div class="metric-card" id="metric-numeric">
+                    <div class="metric-icon">🔢</div>
+                    <h3>Numeric Columns</h3>
+                    <p class="metric-value">--</p>
+                </div>
+
+                <div class="metric-card" id="metric-categorical">
+                    <div class="metric-icon">🏷️</div>
+                    <h3>Categorical Columns</h3>
+                    <p class="metric-value">--</p>
+                </div>
+            </div>
+
+            <!-- Table Preview -->
+            <div id="data-preview-container">
+                <h3>Dataset Preview</h3>
+                <div class="table-wrapper">
+                    <table id="data-preview-table">
+                        <thead>
+                            <tr id="table-header-row">
+                                <th>Column 1</th>
+                                <th>Column 2</th>
+                                <th>Column 3</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body">
+                            <tr>
+                                <td>Sample Data</td>
+                                <td>Sample Data</td>
+                                <td>Sample Data</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- 4. EDA SECTION                             -->
+        <!-- ========================================== -->
+        <section id="eda-section">
+            <div class="section-header">
+                <h2>Exploratory Data Analysis</h2>
+                <p>Automated statistical summaries, distribution graphs, and correlation heatmaps.</p>
+            </div>
+
+            <!-- Summary Statistics -->
+            <div class="eda-card" id="summary-statistics">
+                <h3>Summary Statistics</h3>
+                <p>Statistical metrics (mean, median, standard deviation, min, max) calculated per column.</p>
+                <div id="summary-stats-container" class="stats-placeholder">
+                    <p class="placeholder-text">Upload a dataset to view statistical metrics.</p>
+                </div>
+            </div>
+
+            <!-- Missing Values Analysis -->
+            <div class="eda-card" id="missing-values-analysis">
+                <h3>Missing Values Analysis</h3>
+                <p>Visualization of missing or null data frequency per feature.</p>
+                <div id="missing-values-chart" class="chart-container">
+                    <span class="chart-placeholder-icon">📊</span>
+                    <span>Missing values chart placeholder</span>
+                </div>
+            </div>
+
+            <!-- Data Distribution -->
+            <div class="eda-card" id="data-distribution">
+                <h3>Data Distribution</h3>
+                <p>Histograms and frequency distributions for numerical columns.</p>
+                <div id="distribution-chart" class="chart-container">
+                    <span class="chart-placeholder-icon">📉</span>
+                    <span>Distribution chart placeholder</span>
+                </div>
+            </div>
+
+            <!-- Correlation Analysis -->
+            <div class="eda-card" id="correlation-analysis">
+                <h3>Correlation Analysis</h3>
+                <p>Correlation matrix and heatmap showing variable relationships.</p>
+                <div id="correlation-chart" class="chart-container">
+                    <span class="chart-placeholder-icon">🔥</span>
+                    <span>Correlation heatmap placeholder</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- 5. ASK YOUR DATA SECTION                   -->
+        <!-- ========================================== -->
+        <section id="ask-data" class="ai-query-section">
+            <div class="section-header">
+                <span class="ai-chip">💬 AI Query Engine</span>
+                <h2>Ask Your Data</h2>
+                <p>Query your dataset in natural language to compute metrics, filter rows, or generate custom charts.</p>
+            </div>
+
+            <form id="query-form" class="query-box">
+                <label for="user-query">Ask a question about your dataset:</label>
+                <div class="input-wrapper">
+                    <textarea id="user-query" name="query" rows="3" placeholder="e.g. What are the top 5 products by revenue?"></textarea>
+                    <button type="submit" id="analyze-btn">Analyze</button>
+                </div>
+                <div class="example-chips">
+                    <span class="chip-label">Try asking:</span>
+                    <span class="example-chip">"What are the top 5 products by revenue?"</span>
+                    <span class="example-chip">"Which month had the highest sales?"</span>
+                </div>
+            </form>
+
+            <div id="query-result-container">
+                <h3>Analysis Result</h3>
+                <div id="query-result-text">
+                    <p>Your query results and direct AI answers will appear here.</p>
+                </div>
+                <div id="query-result-chart" class="chart-container">
+                    <span class="chart-placeholder-icon">📈</span>
+                    <span>Query visual chart container</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- 6. AI INSIGHTS SECTION                     -->
+        <!-- ========================================== -->
+        <section id="ai-insights" class="insights-section">
+            <div class="insights-header">
+                <span class="insights-badge">✨ AI Insights</span>
+                <h2>Automated Executive Insights</h2>
+            </div>
+            
+            <div class="insight-card" id="ai-insights-container">
+                <p>AI-generated data observations, detected anomalies, and data trend summaries will be rendered here automatically upon dataset processing.</p>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ========================================== -->
+    <!-- 7. FOOTER SECTION                          -->
+    <!-- ========================================== -->
+    <footer id="main-footer">
+        <p><strong>DataPilot AI</strong> — AI CSV ANALYST &bull; Intelligent Data Exploration</p>
+    </footer>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Main Application JavaScript -->
+    <script src="script.js"></script>
+</body>
+</html>
