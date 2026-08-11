@@ -4,18 +4,20 @@ import re
 from typing import Dict, Any
 
 import pandas as pd
-import google.generativeai as genai
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
+from google import genai
+from google.genai import types
 
-load_dotenv()
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(PROJECT_DIR, 'backend', '.env'))
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 CORS(app)  # Enable Cross-Origin Resource Sharing for local frontend communication
 
 # Configuration
-UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+UPLOAD_FOLDER = os.path.join(PROJECT_DIR, 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
@@ -68,6 +70,46 @@ def upload_file():
         numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
         categorical_cols = df.select_dtypes(exclude=['number']).columns.tolist()
         total_missing = int(df.isnull().sum().sum())
+        missing_values = {
+            col: int(count)
+            for col, count in df.isnull().sum().items()
+            if count > 0
+        }
+
+        # Build histogram data for each numeric column without hardcoding names.
+        distribution_data = {}
+        for col in numeric_cols:
+            values = df[col].dropna()
+            if values.empty:
+                continue
+
+            unique_count = int(values.nunique())
+            if unique_count == 1:
+                distribution_data[col] = {
+                    "labels": [str(values.iloc[0])],
+                    "values": [int(len(values))]
+                }
+                continue
+
+            bin_count = min(10, unique_count)
+            bins = pd.cut(values, bins=bin_count, include_lowest=True)
+            counts = bins.value_counts(sort=False)
+            distribution_data[col] = {
+                "labels": [str(interval) for interval in counts.index],
+                "values": [int(count) for count in counts.values]
+            }
+
+        # Calculate correlations only when there are enough numeric columns.
+        correlation_data = {"columns": [], "matrix": []}
+        if len(numeric_cols) >= 2:
+            correlation_matrix = df[numeric_cols].corr()
+            correlation_data = {
+                "columns": numeric_cols,
+                "matrix": [
+                    [None if pd.isna(value) else round(float(value), 3) for value in row]
+                    for row in correlation_matrix.values
+                ]
+            }
 
         # Perform Exploratory Data Analysis (EDA) per column
         eda_summary = {}
@@ -104,6 +146,9 @@ def upload_file():
             "numeric_columns": numeric_cols,
             "categorical_columns": categorical_cols,
             "total_missing": total_missing,
+            "missing_values": missing_values,
+            "distribution_data": distribution_data,
+            "correlation_data": correlation_data,
             "preview_data": preview_data,
             "eda_summary": eda_summary
         }
@@ -166,15 +211,31 @@ def ask_question():
 # ==========================================
 # 3. LLM + PANDAS ANALYSIS ENGINE
 # ==========================================
-def get_gemini_model():
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+
+ANALYSIS_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "operation": {
+            "type": "string",
+            "enum": ["sum", "average", "count", "minimum", "maximum", "top_n", "group_by", "filter", "unsupported"]
+        },
+        "column": {"type": ["string", "null"]},
+        "group_by": {"type": ["string", "null"]},
+        "n": {"type": ["integer", "null"]},
+        "filter_column": {"type": ["string", "null"]},
+        "filter_value": {"type": ["string", "number", "boolean", "null"]}
+    },
+    "required": ["operation"]
+}
+
+
+def get_gemini_client():
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key or api_key == "your_gemini_api_key_here":
         raise RuntimeError("GEMINI_API_KEY is missing or still set to the placeholder value. Add your real key to the backend .env file.")
 
-    genai.configure(api_key=api_key)
-    return [
-        "gemini-2.5-flash"
-    ]
+    return genai.Client(api_key=api_key)
 
 
 def build_dataset_info(df):
@@ -234,37 +295,31 @@ Return JSON only, no markdown.
 """
 
     user_input = json.dumps({"question": question, "dataset_info": dataset_info}) + "\n\n" + prompt
-    last_error = None
+    try:
+        client = get_gemini_client()
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=user_input,
+            config=types.GenerateContentConfig(
+                system_instruction="You are a careful data-analysis planner. Return only valid JSON with a supported analysis operation. No markdown. Do not generate Python code.",
+                response_mime_type="application/json",
+                response_json_schema=ANALYSIS_RESPONSE_SCHEMA,
+            ),
+        )
+        content = response.text.strip()
 
-    for model_name in get_gemini_model():
-        try:
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction="You are a careful data-analysis planner. Return only valid JSON with a supported analysis operation. No markdown. Do not generate Python code."
-            )
-            response = model.generate_content(user_input)
-            content = response.text.strip()
+        if not content:
+            raise ValueError("Empty response from Gemini API.")
 
-            if not content:
-                raise ValueError("Empty response from Gemini API.")
-
-            if content.startswith("```"):
-                content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.DOTALL)
-
-            parsed = json.loads(content)
-            if not isinstance(parsed, dict):
-                raise ValueError("Gemini response was not a JSON object.")
-            return parsed
-        except Exception as exc:
-            last_error = exc
-            message = str(exc).lower()
-            if "404" in str(exc) or "not found" in message:
-                continue
-            if "429" in message or "quota" in message or "rate limit" in message or "billing" in message:
-                raise RuntimeError("Gemini API quota exceeded. Your free-tier limit has been reached. Please add billing in Google AI Studio or retry later.") from exc
-            raise RuntimeError(f"LLM request failed: {str(exc)}") from exc
-
-    raise RuntimeError(f"LLM request failed: {str(last_error)}") from last_error
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            raise ValueError("Gemini response was not a JSON object.")
+        return parsed
+    except Exception as exc:
+        message = str(exc).lower()
+        if "429" in message or "quota" in message or "rate limit" in message or "billing" in message:
+            raise RuntimeError("Gemini API quota exceeded. Your free-tier limit has been reached. Please add billing in Google AI Studio or retry later.") from exc
+        raise RuntimeError(f"LLM request failed: {str(exc)}") from exc
 
 
 def validate_column(df, col_name, allow_missing=False):
@@ -399,16 +454,16 @@ def generate_result_insight(question: str, result_data):
             "result": result_data[:5]
         }
 
-        for model_name in get_gemini_model():
-            try:
-                model = genai.GenerativeModel(model_name=model_name)
-                response = model.generate_content(
-                    "Write one short, human-readable sentence based only on this result data. Do not use markdown.\n\n"
-                    + json.dumps(small_payload)
-                )
-                return response.text.strip()
-            except Exception:
-                continue
+        client = get_gemini_client()
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=(
+                "Write one short, human-readable sentence based only on this result data. Do not use markdown.\n\n"
+                + json.dumps(small_payload)
+            ),
+        )
+        if response.text:
+            return response.text.strip()
     except Exception:
         pass
 

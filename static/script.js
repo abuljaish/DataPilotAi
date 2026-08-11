@@ -12,7 +12,7 @@ const appState = {
     data: null
 };
 
-let activeChart = null;
+const chartInstances = {};
 let activeChartTarget = 'query-result-chart';
 
 // Application Initialization
@@ -205,7 +205,7 @@ function createChart(type, labels, values, title) {
         return;
     }
 
-    if (activeChart) activeChart.destroy();
+    if (chartInstances[activeChartTarget]) chartInstances[activeChartTarget].destroy();
     container.innerHTML = '<canvas></canvas>';
 
     const canvas = container.querySelector('canvas');
@@ -254,7 +254,7 @@ function createChart(type, labels, values, title) {
         }
     };
 
-    activeChart = new Chart(canvas, {
+    chartInstances[activeChartTarget] = new Chart(canvas, {
         type,
         data: {
             labels,
@@ -268,8 +268,8 @@ function renderMissingValuesChart(data) {
     const missingChart = document.getElementById('missing-values-chart');
     if (!missingChart) return;
 
-    const missingCols = data.columns
-        .map(col => ({ name: col, missing: data.eda_summary[col]?.missing || 0 }))
+    const missingCols = Object.entries(data.missing_values || {})
+        .map(([name, missing]) => ({ name, missing }))
         .filter(item => item.missing > 0)
         .sort((a, b) => b.missing - a.missing)
         .slice(0, 5);
@@ -292,42 +292,53 @@ function renderDistributionChart(data) {
     const distributionChart = document.getElementById('distribution-chart');
     if (!distributionChart) return;
 
-    const numericCols = (data.numeric_columns || []).slice(0, 6);
-    if (!numericCols.length) {
+    const distributions = data.distribution_data || {};
+    const distributionEntry = Object.entries(distributions)
+        .find(([, distribution]) => distribution.labels?.length > 1 && distribution.values?.length > 1)
+        || Object.entries(distributions)
+            .find(([, distribution]) => distribution.labels?.length && distribution.values?.length);
+
+    if (!distributionEntry) {
         distributionChart.innerHTML = '<p>No numeric columns available for distribution chart.</p>';
         return;
     }
 
-    if (numericCols.length === 1) {
-        distributionChart.innerHTML = `
-            <div style="padding: 1rem; width: 100%; text-align: left;">
-                <p style="font-weight: 600; margin-bottom: 0.5rem;">Numeric Distribution Summary</p>
-                <p style="margin: 0;">${escapeHTML(numericCols[0])}: mean = ${data.eda_summary[numericCols[0]]?.mean ?? 'N/A'}</p>
-            </div>`;
-        return;
-    }
-
+    const [column, distribution] = distributionEntry;
     activeChartTarget = 'distribution-chart';
-    const labels = numericCols;
-    const values = numericCols.map(col => Number(data.eda_summary[col]?.mean || 0));
-    createChart('bar', labels, values, 'Average Value by Numeric Column');
+    createChart('bar', distribution.labels, distribution.values, `Distribution of ${column}`);
 }
 
 function renderCorrelationChart(data) {
     const correlationChart = document.getElementById('correlation-chart');
     if (!correlationChart) return;
 
-    const numericCols = (data.numeric_columns || []).slice(0, 6);
-    if (numericCols.length < 2) {
+    const correlation = data.correlation_data || {};
+    const columns = correlation.columns || [];
+    const matrix = correlation.matrix || [];
+    if (columns.length < 2 || matrix.length < 2) {
         correlationChart.innerHTML = '<p>Correlation chart needs at least 2 numeric columns.</p>';
         return;
     }
 
-    const values = numericCols.map(col => Number(data.eda_summary[col]?.mean || 0));
-    const labels = numericCols;
+    const labels = [];
+    const values = [];
+    for (let row = 0; row < columns.length; row += 1) {
+        for (let col = row + 1; col < columns.length; col += 1) {
+            const value = matrix[row]?.[col];
+            if (typeof value === 'number' && Number.isFinite(value)) {
+                labels.push(`${columns[row]} / ${columns[col]}`);
+                values.push(value);
+            }
+        }
+    }
+
+    if (!values.length) {
+        correlationChart.innerHTML = '<p>Correlation could not be calculated because the numeric columns have no varying values.</p>';
+        return;
+    }
 
     activeChartTarget = 'correlation-chart';
-    createChart('bar', labels, values, 'Numeric Column Means');
+    createChart('bar', labels, values, 'Correlation Between Numeric Columns');
 }
 
 function generateInsights(data) {
