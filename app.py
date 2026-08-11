@@ -6,7 +6,7 @@ from typing import Dict, Any
 import pandas as pd
 import google.generativeai as genai
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 
 load_dotenv()
@@ -25,6 +25,11 @@ ACTIVE_DATASET = {
     "filepath": None,
     "df": None
 }
+
+
+@app.route('/')
+def index():
+    return render_template('index.html')
 
 # ==========================================
 # 1. CSV UPLOAD ENDPOINT
