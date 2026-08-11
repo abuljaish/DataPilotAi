@@ -173,9 +173,7 @@ def get_gemini_model():
 
     genai.configure(api_key=api_key)
     return [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-flash-latest"
+        "gemini-2.5-flash"
     ]
 
 

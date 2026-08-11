@@ -346,7 +346,7 @@ function generateInsights(data) {
 }
 
 // ==========================================
-// 4. ASK YOUR DATA API CALL (POST /api/ask)
+// 4. ASK YOUR DATA API CALL 
 // ==========================================
 async function handleQuerySubmit(query) {
     if (!appState.isUploaded) return showError('Please upload a CSV dataset before asking questions.', 'query-result-text');
