@@ -218,13 +218,23 @@ ANALYSIS_RESPONSE_SCHEMA = {
     "properties": {
         "operation": {
             "type": "string",
-            "enum": ["sum", "average", "count", "minimum", "maximum", "top_n", "group_by", "filter", "unsupported"]
+            "enum": ["mean", "sum", "min", "max", "count", "top_n", "group_by", "filter", "unsupported"]
         },
         "column": {"type": ["string", "null"]},
         "group_by": {"type": ["string", "null"]},
         "n": {"type": ["integer", "null"]},
-        "filter_column": {"type": ["string", "null"]},
-        "filter_value": {"type": ["string", "number", "boolean", "null"]}
+        "filters": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "column": {"type": "string"},
+                    "operator": {"type": "string", "enum": ["==", "!=", ">", "<", ">=", "<="]},
+                    "value": {"type": ["string", "number", "boolean", "null"]}
+                },
+                "required": ["column", "operator", "value"]
+            }
+        }
     },
     "required": ["operation"]
 }
@@ -272,10 +282,13 @@ Your job is to decide which simple analytical operation should be used.
 Return ONLY valid JSON.
 
 Rules:
-- Allowed operations: sum, average, count, minimum, maximum, top_n, group_by, filter, unsupported.
+- Allowed operations: mean, sum, min, max, count, top_n, group_by, filter, unsupported.
 - Use only the columns from the dataset metadata.
 - Do not produce Python code.
 - Do not use any columns that are not provided.
+- Return a query plan only. Never calculate an answer yourself.
+- Put every question condition in the "filters" array. Each filter needs "column", "operator", and "value".
+- Supported filter operators are: ==, !=, >, <, >=, <=.
 - If the question asks for top 5 products by revenue, return:
 {
   "operation": "top_n",
@@ -284,10 +297,15 @@ Rules:
   "n": 5
 }
 - For a simple total, return {"operation": "sum", "column": "revenue"}
-- For average, return {"operation": "average", "column": "revenue"}
+- For "What is the average Fare where Pclass = 1?", return:
+{
+  "operation": "mean",
+  "column": "Fare",
+  "filters": [{"column": "Pclass", "operator": "==", "value": 1}]
+}
 - For count, return {"operation": "count", "column": "customer_id"}
-- For minimum or maximum, return {"operation": "minimum" or "maximum", "column": "revenue"}
-- For filter, return {"operation": "filter", "filter_column": "region", "filter_value": "north"}
+- For minimum or maximum, return {"operation": "min" or "max", "column": "revenue"}
+- For a row filter, return {"operation": "filter", "filters": [{"column": "region", "operator": "==", "value": "north"}]}
 - For group by totals, return {"operation": "group_by", "column": "revenue", "group_by": "product"}
 - If the question is not supported, return {"operation": "unsupported"}
 
@@ -332,6 +350,56 @@ def validate_column(df, col_name, allow_missing=False):
     return col_name
 
 
+def apply_filters(df, filters):
+    """Apply every structured filter to a dataframe before an operation runs."""
+    if not filters:
+        return df
+    if not isinstance(filters, list):
+        raise ValueError("The LLM filters must be a list.")
+
+    filtered = df
+    supported_operators = {"==", "!=", ">", "<", ">=", "<="}
+
+    for filter_item in filters:
+        if not isinstance(filter_item, dict):
+            raise ValueError("Each filter must include a column, operator, and value.")
+
+        column = validate_column(df, filter_item.get("column"))
+        operator = filter_item.get("operator")
+        value = filter_item.get("value")
+        if operator not in supported_operators:
+            raise ValueError(f"Unsupported filter operator: {operator}")
+        if value is None:
+            raise ValueError(f"The filter for '{column}' is missing a value.")
+
+        series = filtered[column]
+        if pd.api.types.is_numeric_dtype(series):
+            try:
+                comparison_value = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Filter value '{value}' is not numeric for column '{column}'.") from exc
+        else:
+            comparison_value = str(value).casefold()
+            series = series.astype(str).str.casefold()
+
+        if operator == "==":
+            mask = series == comparison_value
+        elif operator == "!=":
+            mask = series != comparison_value
+        elif operator == ">":
+            mask = series > comparison_value
+        elif operator == "<":
+            mask = series < comparison_value
+        elif operator == ">=":
+            mask = series >= comparison_value
+        else:  # operator == "<="
+            mask = series <= comparison_value
+
+        filtered = filtered[mask]
+
+    return filtered
+
+
 def build_fallback_instruction(question: str, df):
     q = question.lower().strip()
     numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
@@ -351,23 +419,23 @@ def build_fallback_instruction(question: str, df):
 
     if any(term in q for term in ["average", "mean", "avg"]):
         target_col = next((c for c in numeric_cols if c.lower() in q), numeric_cols[0])
-        return {"operation": "average", "column": target_col}
+        return {"operation": "mean", "column": target_col, "filters": []}
 
     if any(term in q for term in ["total", "sum of", "sum"]):
         target_col = next((c for c in numeric_cols if c.lower() in q), numeric_cols[0])
-        return {"operation": "sum", "column": target_col}
+        return {"operation": "sum", "column": target_col, "filters": []}
 
     if "count" in q or "number of" in q:
         target_col = next((c for c in df.columns if c.lower() in q), df.columns[0])
-        return {"operation": "count", "column": target_col}
+        return {"operation": "count", "column": target_col, "filters": []}
 
     if any(term in q for term in ["minimum", "min", "lowest", "smallest"]):
         target_col = next((c for c in numeric_cols if c.lower() in q), numeric_cols[0])
-        return {"operation": "minimum", "column": target_col}
+        return {"operation": "min", "column": target_col, "filters": []}
 
     if any(term in q for term in ["maximum", "max", "highest", "largest"]):
         target_col = next((c for c in numeric_cols if c.lower() in q), numeric_cols[0])
-        return {"operation": "maximum", "column": target_col}
+        return {"operation": "max", "column": target_col, "filters": []}
 
     if any(term in q for term in ["group by", "by category", "by region", "by product"]):
         target_num_col = next((c for c in numeric_cols if c.lower() in q), numeric_cols[0])
@@ -384,13 +452,19 @@ def execute_pandas_query(df, instruction):
     operation = str(instruction.get('operation', 'unsupported')).strip().lower()
 
     if operation == 'unsupported':
-        raise ValueError("This analysis type is not supported in the MVP yet.")
+        raise ValueError("Unsupported analysis type. Please try another query.")
+
+    # Filtering always happens before grouping, aggregation, or row preview.
+    filters = instruction.get('filters', [])
+    filtered_df = apply_filters(df, filters)
+    if filtered_df.empty:
+        return {"answer": "No rows matched the requested filters.", "data": []}
 
     if operation == 'top_n':
         column = validate_column(df, instruction.get('column'))
         group_by = validate_column(df, instruction.get('group_by'))
         n = int(instruction.get('n', 5))
-        grouped = df.groupby(group_by, as_index=False)[column].sum().sort_values(by=column, ascending=False).head(n)
+        grouped = filtered_df.groupby(group_by, as_index=False)[column].sum().sort_values(by=column, ascending=False).head(n)
         answer = f"Top {n} values for '{group_by}' by '{column}': " + ", ".join(
             [f"{row[group_by]}: {row[column]:,.2f}" for _, row in grouped.iterrows()]
         )
@@ -399,47 +473,42 @@ def execute_pandas_query(df, instruction):
     if operation == 'group_by':
         column = validate_column(df, instruction.get('column'))
         group_by = validate_column(df, instruction.get('group_by'))
-        grouped = df.groupby(group_by, as_index=False)[column].sum().sort_values(by=column, ascending=False)
+        grouped = filtered_df.groupby(group_by, as_index=False)[column].sum().sort_values(by=column, ascending=False)
         answer = f"Grouped total of '{column}' by '{group_by}'."
         return {"answer": answer, "data": grouped.to_dict(orient='records')}
 
     if operation == 'sum':
         column = validate_column(df, instruction.get('column'))
-        total = float(df[column].sum())
+        total = float(filtered_df[column].sum())
         return {"answer": f"The total of '{column}' is {total:,.2f}.", "data": [{"column": column, "sum": total}]}
 
-    if operation == 'average':
+    if operation in ('mean', 'average'):
         column = validate_column(df, instruction.get('column'))
-        avg = float(df[column].mean())
+        avg = float(filtered_df[column].mean())
         return {"answer": f"The average of '{column}' is {avg:,.2f}.", "data": [{"column": column, "average": avg}]}
 
     if operation == 'count':
         column = validate_column(df, instruction.get('column'))
-        count = int(df[column].count())
+        count = int(filtered_df[column].count())
         return {"answer": f"There are {count:,} non-empty values in '{column}'.", "data": [{"column": column, "count": count}]}
 
-    if operation == 'minimum':
+    if operation in ('min', 'minimum'):
         column = validate_column(df, instruction.get('column'))
-        min_val = float(df[column].min())
+        min_val = float(filtered_df[column].min())
         return {"answer": f"The minimum value in '{column}' is {min_val:,.2f}.", "data": [{"column": column, "minimum": min_val}]}
 
-    if operation == 'maximum':
+    if operation in ('max', 'maximum'):
         column = validate_column(df, instruction.get('column'))
-        max_val = float(df[column].max())
+        max_val = float(filtered_df[column].max())
         return {"answer": f"The maximum value in '{column}' is {max_val:,.2f}.", "data": [{"column": column, "maximum": max_val}]}
 
     if operation == 'filter':
-        filter_column = validate_column(df, instruction.get('filter_column'))
-        filter_value = instruction.get('filter_value')
-        if filter_value is None:
-            raise ValueError("The LLM filter instruction is missing a filter value.")
-
-        filtered = df[df[filter_column].astype(str).str.contains(str(filter_value), case=False, na=False)]
-        if filtered.empty:
-            return {"answer": f"No rows matched the filter '{filter_value}' in '{filter_column}'.", "data": []}
-
-        answer = f"Filtered rows for '{filter_column}' = '{filter_value}' returned {len(filtered):,} rows."
-        return {"answer": answer, "data": filtered.head(10).to_dict(orient='records')}
+        if not filters:
+            raise ValueError("A filter operation requires at least one filter.")
+        return {
+            "answer": f"The filters returned {len(filtered_df):,} rows.",
+            "data": filtered_df.head(10).to_dict(orient='records')
+        }
 
     raise ValueError(f"Unsupported operation: {operation}")
 
