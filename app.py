@@ -11,7 +11,7 @@ from flask_cors import CORS
 
 load_dotenv()
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder='templates', static_folder='static')
 CORS(app)  # Enable Cross-Origin Resource Sharing for local frontend communication
 
 # Configuration

@@ -3,7 +3,7 @@
  * Frontend Application Logic (Flask + Pandas Backend Integration)
  */
 
-const API_BASE_URL = "http://127.0.0.1:5000";
+const API_BASE_URL = "";
 
 // Global App State
 const appState = {
