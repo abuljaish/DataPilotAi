@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 backend/uploads/
+
+# User-uploaded datasets are runtime/test data and should never be committed.
+uploads/*.csv
