@@ -206,9 +206,13 @@ function createChart(type, labels, values, title) {
     }
 
     if (chartInstances[activeChartTarget]) chartInstances[activeChartTarget].destroy();
-    container.innerHTML = '<canvas></canvas>';
 
-    const canvas = container.querySelector('canvas');
+    // Preserve any note or supplementary content inside the container
+    // Remove any existing canvas and re-create it so surrounding info is not lost.
+    const existingCanvas = container.querySelector('canvas');
+    if (existingCanvas) existingCanvas.remove();
+    const canvas = document.createElement('canvas');
+    container.appendChild(canvas);
     if (!canvas) return;
 
     const isDark = document.body.classList.contains('dark-mode');
@@ -225,6 +229,75 @@ function createChart(type, labels, values, title) {
         fill: type === 'line' ? false : true,
         tension: 0.3,
         pointRadius: type === 'line' ? 4 : 0
+    };
+
+    // Short-format number like 12.5K, 1.2M while keeping tooltips showing full value
+    function formatShortNumber(n) {
+        if (n === null || n === undefined || Number.isNaN(Number(n))) return '';
+        const num = Number(n);
+        const abs = Math.abs(num);
+        if (abs >= 1e9) return (num / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+        if (abs >= 1e6) return (num / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+        if (abs >= 1e3) return (num / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
+        return num.toString();
+    }
+
+    // Plugin to draw value labels above each bar so ensures visibility for small bars
+    const valueLabelPlugin = {
+        id: 'valueLabelPlugin',
+        afterDatasetsDraw: (chart) => {
+            const ctx = chart.ctx;
+            const chartArea = chart.chartArea;
+            ctx.save();
+            ctx.textBaseline = 'middle';
+
+            chart.data.datasets.forEach((ds, datasetIndex) => {
+                const meta = chart.getDatasetMeta(datasetIndex);
+                if (!meta || !meta.data) return;
+
+                meta.data.forEach((elem, index) => {
+                    try {
+                        const value = ds.data[index];
+                        if (value === null || value === undefined || Number.isNaN(Number(value))) return;
+                        const display = formatShortNumber(value);
+
+                        const x = elem.x;
+                        // For vertical bars element.y is the top of the bar for positive values
+                        const y = elem.y;
+
+                        // Text style
+                        const isDark = document.body.classList.contains('dark-mode');
+                        const textColor = isDark ? '#0f172a' : '#0f172a'; // dark text on both for readability
+                        ctx.fillStyle = textColor;
+                        ctx.font = '600 12px Inter, Roboto, Arial, sans-serif';
+                        ctx.textAlign = 'center';
+
+                        const metrics = ctx.measureText(display);
+                        const textHeight = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent || 12;
+                        const offset = 8;
+
+                        // Proposed label position above the bar
+                        let labelY = y - offset - textHeight / 2;
+
+                        // If label would be above chart top, place it below the bar
+                        if (labelY < chartArea.top + 2) {
+                            const bottom = (typeof elem.base !== 'undefined') ? elem.base : (elem.y + (elem.height || 0));
+                            labelY = bottom + offset + textHeight / 2;
+                        }
+
+                        // Draw a light halo to keep text readable on colored bars
+                        ctx.lineWidth = 3;
+                        ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+                        ctx.strokeText(display, x, labelY);
+                        ctx.fillText(display, x, labelY);
+                    } catch (e) {
+                        // ignore per-bar labeling errors
+                    }
+                });
+            });
+
+            ctx.restore();
+        }
     };
 
     const options = {
@@ -260,7 +333,8 @@ function createChart(type, labels, values, title) {
             labels,
             datasets: [dataset]
         },
-        options
+        options,
+        plugins: [valueLabelPlugin]
     });
 }
 
@@ -284,6 +358,8 @@ function renderMissingValuesChart(data) {
         return;
     }
 
+    // Clear any previous placeholder text/notes before rendering the chart
+    missingChart.innerHTML = '';
     activeChartTarget = 'missing-values-chart';
     createChart('bar', missingCols.map(item => item.name), missingCols.map(item => item.missing), 'Missing Values');
 }
@@ -304,6 +380,8 @@ function renderDistributionChart(data) {
     }
 
     const [column, distribution] = distributionEntry;
+    // Clear any previous placeholder text/notes before rendering the chart
+    distributionChart.innerHTML = '';
     activeChartTarget = 'distribution-chart';
     createChart('bar', distribution.labels, distribution.values, `Distribution of ${column}`);
 }
@@ -315,30 +393,168 @@ function renderCorrelationChart(data) {
     const correlation = data.correlation_data || {};
     const columns = correlation.columns || [];
     const matrix = correlation.matrix || [];
+    const excluded = data.excluded_identifier_columns || [];
     if (columns.length < 2 || matrix.length < 2) {
-        correlationChart.innerHTML = '<p>Correlation chart needs at least 2 numeric columns.</p>';
+        if (excluded && excluded.length) {
+            correlationChart.innerHTML = `<p>Excluded identifier columns from correlation analysis: <strong>${escapeHTML(excluded.join(', '))}</strong></p>`;
+            correlationChart.insertAdjacentHTML('beforeend', '<p>Not enough numeric columns remain to compute correlations.</p>');
+        } else {
+            correlationChart.innerHTML = '<p>Correlation chart needs at least 2 numeric columns.</p>';
+        }
         return;
     }
 
-    const labels = [];
-    const values = [];
+    const pairs = [];
     for (let row = 0; row < columns.length; row += 1) {
         for (let col = row + 1; col < columns.length; col += 1) {
             const value = matrix[row]?.[col];
             if (typeof value === 'number' && Number.isFinite(value)) {
-                labels.push(`${columns[row]} / ${columns[col]}`);
-                values.push(value);
+                // Only use the upper triangle: no self-correlations or duplicates.
+                pairs.push({ left: columns[row], right: columns[col], value });
             }
         }
     }
 
-    if (!values.length) {
+    if (!pairs.length) {
         correlationChart.innerHTML = '<p>Correlation could not be calculated because the numeric columns have no varying values.</p>';
         return;
     }
 
-    activeChartTarget = 'correlation-chart';
-    createChart('bar', labels, values, 'Correlation Between Numeric Columns');
+    if (chartInstances['correlation-chart']) {
+        chartInstances['correlation-chart'].destroy();
+        delete chartInstances['correlation-chart'];
+    }
+
+    const count = columns.length;
+    const mode = count <= 10 ? 'compact' : count <= 20 ? 'expanded' : 'large';
+    const cellSize = count <= 10 ? 58 : count <= 20 ? 50 : 34;
+    const annotationSize = count <= 10 ? 12 : count <= 20 ? 10 : 0;
+
+    correlationChart.innerHTML = '';
+    correlationChart.classList.add('correlation-visualization');
+    if (excluded && excluded.length) {
+        const note = document.createElement('p');
+        note.className = 'correlation-note';
+        note.textContent = `Excluded identifier columns: ${excluded.join(', ')}`;
+        correlationChart.appendChild(note);
+    }
+
+    const intro = document.createElement('div');
+    intro.className = 'correlation-intro';
+    intro.innerHTML = `<strong>Correlation heatmap</strong><span>${count} numeric variables${mode === 'large' ? ' · scroll to explore the full matrix' : ''}</span>`;
+    correlationChart.appendChild(intro);
+
+    const scrollArea = document.createElement('div');
+    scrollArea.className = `correlation-heatmap-scroll correlation-heatmap--${mode}`;
+    scrollArea.setAttribute('tabindex', '0');
+    scrollArea.setAttribute('aria-label', `Correlation heatmap for ${count} numeric columns`);
+
+    const grid = document.createElement('div');
+    grid.className = 'correlation-heatmap-grid';
+    grid.style.setProperty('--column-count', count);
+    grid.style.setProperty('--cell-size', `${cellSize}px`);
+    grid.style.setProperty('--annotation-size', `${annotationSize}px`);
+
+    const corner = document.createElement('div');
+    corner.className = 'correlation-heatmap-corner';
+    grid.appendChild(corner);
+    columns.forEach(column => {
+        const label = document.createElement('div');
+        label.className = 'correlation-column-label';
+        label.textContent = column;
+        label.title = column;
+        grid.appendChild(label);
+    });
+
+    columns.forEach((rowName, rowIndex) => {
+        const rowLabel = document.createElement('div');
+        rowLabel.className = 'correlation-row-label';
+        rowLabel.textContent = rowName;
+        rowLabel.title = rowName;
+        grid.appendChild(rowLabel);
+
+        columns.forEach((columnName, columnIndex) => {
+            const value = matrix[rowIndex]?.[columnIndex];
+            const cell = document.createElement('div');
+            cell.className = 'correlation-cell';
+            if (typeof value === 'number' && Number.isFinite(value)) {
+                cell.style.backgroundColor = correlationColor(value);
+                if (Math.abs(value) < 0.45) cell.style.color = '#0f172a';
+                cell.title = `${rowName} ↔ ${columnName}: ${value.toFixed(2)}`;
+                cell.setAttribute('aria-label', cell.title);
+                if (annotationSize) cell.textContent = value.toFixed(2);
+            } else {
+                cell.classList.add('correlation-cell--empty');
+                cell.title = `${rowName} ↔ ${columnName}: unavailable`;
+            }
+            grid.appendChild(cell);
+        });
+    });
+    scrollArea.appendChild(grid);
+    correlationChart.appendChild(scrollArea);
+
+    const legend = document.createElement('div');
+    legend.className = 'correlation-legend';
+    legend.innerHTML = '<span>-1</span><div class="correlation-legend-gradient" aria-hidden="true"></div><span>0</span><div class="correlation-legend-gradient correlation-legend-gradient--positive" aria-hidden="true"></div><span>+1</span>';
+    correlationChart.appendChild(legend);
+    correlationChart.appendChild(createStrongCorrelationSummary(pairs));
+}
+
+function correlationColor(value) {
+    const clamped = Math.max(-1, Math.min(1, value));
+    const magnitude = Math.abs(clamped);
+    const base = clamped >= 0 ? [37, 99, 235] : [225, 29, 72];
+    const alpha = 0.12 + magnitude * 0.82;
+    return `rgba(${base[0]}, ${base[1]}, ${base[2]}, ${alpha})`;
+}
+
+function createStrongCorrelationSummary(pairs) {
+    const summary = document.createElement('section');
+    summary.className = 'strong-correlation-summary';
+
+    const heading = document.createElement('h4');
+    heading.textContent = 'Strongest Relationships';
+    summary.appendChild(heading);
+
+    const description = document.createElement('p');
+    description.textContent = 'Unique pairs, ranked by correlation strength.';
+    summary.appendChild(description);
+
+    const lists = document.createElement('div');
+    lists.className = 'strong-correlation-lists';
+    const positive = pairs.filter(pair => pair.value > 0).sort((a, b) => b.value - a.value).slice(0, 5);
+    const negative = pairs.filter(pair => pair.value < 0).sort((a, b) => a.value - b.value).slice(0, 5);
+
+    lists.appendChild(createCorrelationList('Positive', positive, 'positive'));
+    lists.appendChild(createCorrelationList('Negative', negative, 'negative'));
+    summary.appendChild(lists);
+    return summary;
+}
+
+function createCorrelationList(title, pairs, tone) {
+    const group = document.createElement('div');
+    group.className = `strong-correlation-group strong-correlation-group--${tone}`;
+    const heading = document.createElement('h5');
+    heading.textContent = title;
+    group.appendChild(heading);
+    const list = document.createElement('ul');
+    if (!pairs.length) {
+        const item = document.createElement('li');
+        item.textContent = 'No relationships found.';
+        list.appendChild(item);
+    } else {
+        pairs.forEach(pair => {
+            const item = document.createElement('li');
+            const names = document.createElement('span');
+            names.textContent = `${pair.left} ↔ ${pair.right}`;
+            const value = document.createElement('strong');
+            value.textContent = pair.value.toFixed(2);
+            item.append(names, value);
+            list.appendChild(item);
+        });
+    }
+    group.appendChild(list);
+    return group;
 }
 
 function generateInsights(data) {
@@ -388,7 +604,11 @@ async function handleQuerySubmit(query) {
                 </div>`;
         }
 
-        const chartData = extractChartData(data);
+        // Prefer the explicit chart plan returned by the backend. The legacy
+        // data-based inference remains as a fallback for older API responses.
+        const chartData = Array.isArray(data.charts) && data.charts.length
+            ? data.charts[0]
+            : extractChartData(data);
         if (chartData) {
             activeChartTarget = 'query-result-chart';
             createChart(chartData.type, chartData.labels, chartData.values, chartData.title);
