@@ -1,5 +1,5 @@
 # 🚀 DataPilot
-[Website Link](https://datapilotai-1.onrender.com/)
+[DataPilot website](https://datapilotai-1.onrender.com/)
 
 
 > **Ask your data. Get answers. Discover insights.**
